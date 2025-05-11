@@ -70,19 +70,19 @@
     <string name="brush_color">Brush Color</string>
 
     <!-- Run Screen -->
-    <string name="prompt_settings">Prompts</string>
+    <string name="prompt_settings">프롬프트</string>
     <string name="advanced_settings">Advanced</string>
     <string name="advanced_settings_title">Advanced Settings</string>
-    <string name="image_prompt">Image Generation Prompt</string>
-    <string name="negative_prompt">Negative Prompt</string>
-    <string name="generate_image">Generate</string>
-    <string name="generating">Generating image…</string>
+    <string name="image_prompt">이미지 생성 문구</string>
+    <string name="negative_prompt">네거티브 프롬프트</string>
+    <string name="generate_image">생성</string>
+    <string name="generating">이미지 생성 중…</string>
     <string name="generation_progress">%d%%</string>
     <string name="no_results">No results yet</string>
     <string name="no_results_hint">Create an image first~</string>
     <string name="go_to_generate">Create</string>
-    <string name="prompt_tab">Prompt</string>
-    <string name="result_tab">Result</string>
+    <string name="prompt_tab">프롬프트</string>
+    <string name="result_tab">결과</string>
     <string name="confirm_exit">Confirm to Exit</string>
     <string name="confirm_exit_hint">Generation in progress, Are you sure to Exit?</string>
     <string name="reset">Reset</string>
@@ -117,4 +117,6 @@
     <!-- Info Messages -->
     <string name="image_saved">Image saved to gallery</string>
     <string name="loading_model">Loading model…</string>
+    <string name="unsupport_device">지원하지 않는 디바이스입니다</string>
+    <string name="model_load_error">없는 모델입니다</string>
 </resources>

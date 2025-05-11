@@ -101,6 +101,47 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import kotlinx.coroutines.CoroutineScope
 
+import android.app.Activity
+import android.speech.RecognizerIntent
+import androidx.activity.result.ActivityResult
+
+import org.json.JSONArray
+import kotlinx.coroutines.withContext
+
+private val openAiClient by lazy {
+    OkHttpClient.Builder().build()
+}
+
+private suspend fun translateToEnglish(korean: String): String = withContext(Dispatchers.IO) {
+    val payload = JSONObject().apply {
+        put("model", "gpt-3.5-turbo")
+        put("messages", JSONArray().apply {
+            put(JSONObject().apply {
+                put("role", "system")
+                put("content", "Translate the following Korean text to English:")
+            })
+            put(JSONObject().apply {
+                put("role", "user")
+                put("content", korean)
+            })
+        })
+    }
+    val req = Request.Builder()
+        .url("https://api.openai.com/v1/chat/completions")
+        .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
+        .post(payload.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+        .build()
+    openAiClient.newCall(req).execute().use { res ->
+        if (!res.isSuccessful) throw IOException("OpenAI Error: ${res.code}")
+        JSONObject(res.body!!.string())
+            .getJSONArray("choices")
+            .getJSONObject(0)
+            .getJSONObject("message")
+            .getString("content")
+            .trim()
+    }
+}
+
 
 private suspend fun reportImage(
     context: Context,
@@ -379,6 +420,58 @@ fun ModelRunScreen(
     var maskBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isInpaintMode by remember { mutableStateOf(false) }
     var savedPathHistory by remember { mutableStateOf<List<PathData>?>(null) }
+    var isNegativeSpeech by remember { mutableStateOf(false) }
+
+    // RECORD_AUDIO 권한 요청 런처
+    val requestRecordPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "음성 입력 권한이 필요합니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ★ 수정된 부분: ActivityResult 타입 명시, Activity.RESULT_OK 사용
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result: ActivityResult ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull().orEmpty()
+            if (isNegativeSpeech) {
+                negativePrompt += " $spoken"
+                scope.launch {
+                    generationPreferences.saveNegativePrompt(modelId, negativePrompt)
+                }
+            } else {
+                prompt += " $spoken"
+                scope.launch {
+                    generationPreferences.savePrompt(modelId, prompt)
+                }
+            }
+        }
+    }
+
+    fun startSpeechRecognition() {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestRecordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "음성으로 입력하세요")
+            }
+            speechLauncher.launch(intent)
+        }
+    }
 
     fun processSelectedImage(uri: Uri) {
         imageUriForCrop = uri
@@ -1265,14 +1358,22 @@ fun ModelRunScreen(
                                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline
                                             ),
                                             trailingIcon = {
-                                                IconButton(onClick = {
-                                                    expandedPrompt = !expandedPrompt
-                                                }) {
-                                                    Icon(
-                                                        if (expandedPrompt) Icons.Default.KeyboardArrowUp
-                                                        else Icons.Default.KeyboardArrowDown,
-                                                        contentDescription = if (expandedPrompt) "collapse" else "expand"
-                                                    )
+                                                Row {
+                                                    // 음성 버튼
+                                                    IconButton(onClick = {
+                                                        isNegativeSpeech = false
+                                                        startSpeechRecognition()
+                                                    }) {
+                                                        Icon(Icons.Default.Mic, contentDescription = "음성 입력")
+                                                    }
+                                                    // 원래 있던 펼침/접기 버튼
+                                                    IconButton(onClick = { expandedPrompt = !expandedPrompt }) {
+                                                        Icon(
+                                                            if (expandedPrompt) Icons.Default.KeyboardArrowUp
+                                                            else Icons.Default.KeyboardArrowDown,
+                                                            contentDescription = if (expandedPrompt) "접기" else "펼치기"
+                                                        )
+                                                    }
                                                 }
                                             }
                                         )
@@ -1303,14 +1404,20 @@ fun ModelRunScreen(
                                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline
                                             ),
                                             trailingIcon = {
-                                                IconButton(onClick = {
-                                                    expandedNegativePrompt = !expandedNegativePrompt
-                                                }) {
-                                                    Icon(
-                                                        if (expandedNegativePrompt) Icons.Default.KeyboardArrowUp
-                                                        else Icons.Default.KeyboardArrowDown,
-                                                        contentDescription = if (expandedNegativePrompt) "collapse" else "expand"
-                                                    )
+                                                Row {
+                                                    IconButton(onClick = {
+                                                        isNegativeSpeech = true
+                                                        startSpeechRecognition()
+                                                    }) {
+                                                        Icon(Icons.Default.Mic, contentDescription = "음성 입력")
+                                                    }
+                                                    IconButton(onClick = { expandedNegativePrompt = !expandedNegativePrompt }) {
+                                                        Icon(
+                                                            if (expandedNegativePrompt) Icons.Default.KeyboardArrowUp
+                                                            else Icons.Default.KeyboardArrowDown,
+                                                            contentDescription = if (expandedNegativePrompt) "접기" else "펼치기"
+                                                        )
+                                                    }
                                                 }
                                             }
                                         )
@@ -1318,62 +1425,60 @@ fun ModelRunScreen(
                                         Button(
                                             onClick = {
                                                 focusManager.clearFocus()
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start generation"
-                                                )
-                                                generationParamsTmp = GenerationParameters(
-                                                    steps = steps.roundToInt(),
-                                                    cfg = cfg,
-                                                    seed = 0,
-                                                    prompt = prompt,
-                                                    negativePrompt = negativePrompt,
-                                                    generationTime = "",
-                                                    size = size,
-                                                    runOnCpu = model.runOnCpu,
-                                                    denoiseStrength = denoiseStrength,
-                                                    inputImage = null
-                                                )
+                                                coroutineScope.launch {
+                                                    // 한글 → 영어 번역 (빈 값은 번역 호출 안 함)
+                                                    val enPrompt = if (prompt.isBlank()) {
+                                                        ""
+                                                    } else {
+                                                        translateToEnglish(prompt)
+                                                    }
 
-                                                val intent = Intent(
-                                                    context,
-                                                    BackgroundGenerationService::class.java
-                                                ).apply {
-                                                    putExtra("prompt", prompt)
-                                                    putExtra("negative_prompt", negativePrompt)
-                                                    putExtra("steps", steps.roundToInt())
-                                                    putExtra("cfg", cfg)
-                                                    seed.toLongOrNull()
-                                                        ?.let { putExtra("seed", it) }
-                                                    putExtra("size", size)
-                                                    putExtra("denoise_strength", denoiseStrength)
+                                                    val enNegPrompt = if (negativePrompt.isBlank()) {
+                                                        ""
+                                                    } else {
+                                                        translateToEnglish(negativePrompt)
+                                                    }
 
-                                                    if (selectedImageUri != null && base64EncodeDone) {
-                                                        putExtra("has_image", true)
-                                                        if (isInpaintMode && maskBitmap != null) {
-                                                            putExtra("has_mask", true)
+                                                    // generationParamsTmp 설정
+                                                    generationParamsTmp = GenerationParameters(
+                                                        steps = steps.roundToInt(),
+                                                        cfg = cfg,
+                                                        seed = 0,
+                                                        prompt = enPrompt,
+                                                        negativePrompt = enNegPrompt,
+                                                        generationTime = "",
+                                                        size = size,
+                                                        runOnCpu = model.runOnCpu,
+                                                        denoiseStrength = denoiseStrength,
+                                                        inputImage = null
+                                                    )
+
+                                                    // 서비스 호출 Intent 구성
+                                                    val intent = Intent(context, BackgroundGenerationService::class.java).apply {
+                                                        putExtra("prompt", enPrompt)
+                                                        putExtra("negative_prompt", enNegPrompt)
+                                                        putExtra("steps", steps.roundToInt())
+                                                        putExtra("cfg", cfg)
+                                                        seed.toLongOrNull()?.let { putExtra("seed", it) }
+                                                        putExtra("size", size)
+                                                        putExtra("denoise_strength", denoiseStrength)
+                                                        if (selectedImageUri != null && base64EncodeDone) {
+                                                            putExtra("has_image", true)
+                                                            if (isInpaintMode && maskBitmap != null) {
+                                                                putExtra("has_mask", true)
+                                                            }
                                                         }
                                                     }
+
+                                                    context.startForegroundService(intent)
                                                 }
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start service"
-                                                )
-                                                context.startForegroundService(intent)
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start service sent"
-                                                )
                                             },
                                             enabled = serviceState !is GenerationState.Progress,
                                             modifier = Modifier.fillMaxWidth(),
                                             shape = MaterialTheme.shapes.medium
                                         ) {
                                             if (serviceState is GenerationState.Progress) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(24.dp),
-                                                    color = MaterialTheme.colorScheme.onPrimary
-                                                )
+                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
                                             } else {
                                                 Text(stringResource(R.string.generate_image))
                                             }

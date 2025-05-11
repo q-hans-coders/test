@@ -23,6 +23,10 @@ android {
             //noinspection ChromeOsAbiSupport
             abiFilters += "arm64-v8a"
         }
+
+        val openAiKey: String = project
+            .findProperty("openai.api.key") as String
+        buildConfigField("String", "OPENAI_API_KEY", "\"$openAiKey\"")
     }
 
     bundle {
@@ -102,6 +106,7 @@ dependencies {
     implementation(libs.material3.xml)
     implementation(libs.coil.compose)
     implementation(libs.cropify)
+
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
