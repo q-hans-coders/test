@@ -1,7 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 기본 앱 테마 (ActionBar 없이 Material3 DayNight) -->
     <style name="Theme.LocalDream" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 상태바 글자가 어두운 테마인지 여부 -->
         <item name="android:windowLightStatusBar">true</item>
+        <!-- 상태바 배경을 투명으로 -->
         <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
+
+    <!-- AR 전용 액티비티에서 사용할 NoActionBar 변형 -->
+    <style name="Theme.LocalDream.NoActionBar" parent="Theme.LocalDream">
+        <!-- 액션바 비활성화 -->
+        <item name="windowActionBar">false</item>
+        <!-- 타이틀바 비활성화 -->
+        <item name="windowNoTitle">true</item>
+    </style>
+
 </resources>

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
@@ -10,7 +12,6 @@ android {
     defaultConfig {
         applicationId = "io.github.xororz.localdream"
         minSdk = 28
-//        minSdk = 31
         targetSdk = 35
         versionCode = 31
         versionName = "1.4.1"
@@ -24,9 +25,18 @@ android {
             abiFilters += "arm64-v8a"
         }
 
-        val openAiKey: String = project
-            .findProperty("openai.api.key") as String
+        val props = Properties().apply {
+            rootProject.file("local.properties")
+                .inputStream()
+                .use { load(it) }
+        }
+        val openAiKey = props.getProperty("openai.api.key")
+            ?: throw GradleException("local.properties에 openai.api.key를 정의해주세요")
         buildConfigField("String", "OPENAI_API_KEY", "\"$openAiKey\"")
+
+        val meshyKey = props.getProperty("meshy.api.key")
+            ?: throw GradleException("local.properties에 meshy.api.key를 정의해주세요")
+        buildConfigField("String", "MESHY_API_KEY", "\"$meshyKey\"")
     }
 
     bundle {
@@ -43,7 +53,10 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     compileOptions {
@@ -83,11 +96,11 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            val flavorName = variant.flavorName
             output.outputFileName = "LocalDream_armv8a_${variant.versionName}.apk"
         }
     }
 }
+
 
 dependencies {
     implementation(libs.androidx.core.ktx)
@@ -107,6 +120,9 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.cropify)
 
+    // ARCore & Sceneform UX
+    implementation("com.google.ar:core:1.38.0")
+    implementation("com.google.ar.sceneform.ux:sceneform-ux:1.17.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

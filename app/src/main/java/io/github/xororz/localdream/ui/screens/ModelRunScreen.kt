@@ -107,6 +107,8 @@ import androidx.activity.result.ActivityResult
 
 import org.json.JSONArray
 import kotlinx.coroutines.withContext
+import androidx.core.content.FileProvider
+import io.github.xororz.localdream.ArViewActivity
 
 private val openAiClient by lazy {
     OkHttpClient.Builder().build()
@@ -1817,6 +1819,30 @@ fun ModelRunScreen(
                                                             Icon(
                                                                 imageVector = Icons.Default.Save,
                                                                 contentDescription = "save image"
+                                                            )
+                                                        }
+                                                        FilledTonalIconButton(
+                                                            onClick = {
+                                                                // AR 진입 로직: 비트맵을 캐시에 저장하고 URI를 넘겨줍니다
+                                                                val cacheFile = File(context.cacheDir, "ar_image.png")
+                                                                FileOutputStream(cacheFile).use { out ->
+                                                                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+                                                                }
+                                                                val uri = FileProvider.getUriForFile(
+                                                                    context,
+                                                                    "${context.packageName}.fileprovider",
+                                                                    cacheFile
+                                                                )
+                                                                context.startActivity(
+                                                                    Intent(context, ArViewActivity::class.java).apply {
+                                                                        putExtra("image_uri", uri.toString())
+                                                                    }
+                                                                )
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Add,
+                                                                contentDescription = "view in AR"
                                                             )
                                                         }
                                                     }
