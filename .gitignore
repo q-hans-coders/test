@@ -13,3 +13,4 @@ app/src/main/jniLibs
 app/release
 app/basic
 app/filter
+/gradle.properties
