@@ -14,3 +14,4 @@ app/release
 app/basic
 app/filter
 /gradle.properties
+gradle.properties
