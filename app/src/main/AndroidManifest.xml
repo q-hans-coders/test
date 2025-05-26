@@ -2,35 +2,54 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 카메라 권한에 대응하는 기능 선언 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <!-- ARCore용 카메라 기능 선언 -->
+    <uses-feature android:name="android.hardware.camera.ar" android:required="false"/>
+
+    <!-- 퍼미션 모음 -->
+    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
-
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
-
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
     <uses-permission android:name="android.permission.EXECUTE_PRIVATE_BINARY" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:allowBackup="true"
-        android:dataExtractionRules="@xml/data_extraction_rules"
-        android:extractNativeLibs="true"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:requestLegacyExternalStorage="true"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.LocalDream">
 
+        <!-- ARCore 설치 여부 처리 -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional"/>
+
+        <!-- FileProvider (임시 파일 공유용) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <!-- 이 줄이 반드시 필요합니다 -->
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"/>
+        </provider>
+
+        <!-- 메인 액티비티 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -38,21 +57,26 @@
             android:screenOrientation="portrait"
             android:theme="@style/Theme.LocalDream">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
 
+        <!-- AR 뷰 전용 액티비티 -->
+        <activity
+            android:name=".ArViewActivity"
+            android:exported="true"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.LocalDream.NoActionBar"/>
+
+        <!-- 백그라운드 서비스들 -->
         <service
             android:name=".service.BackendService"
-            android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
+            android:foregroundServiceType="dataSync"/>
         <service
             android:name=".service.BackgroundGenerationService"
-            android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync"/>
     </application>
 </manifest>

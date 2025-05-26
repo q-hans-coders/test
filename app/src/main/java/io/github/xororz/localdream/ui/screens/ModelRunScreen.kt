@@ -39,6 +39,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
 import java.util.Base64
+import android.util.Base64 as AndroidBase64
 import java.util.Scanner
 import java.util.concurrent.TimeUnit
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -101,6 +102,64 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import kotlinx.coroutines.CoroutineScope
 
+import android.app.Activity
+import android.speech.RecognizerIntent
+import androidx.activity.result.ActivityResult
+
+import org.json.JSONArray
+import kotlinx.coroutines.withContext
+import androidx.core.content.FileProvider
+import io.github.xororz.localdream.ArViewActivity
+import io.github.xororz.localdream.service.MeshyService
+import io.github.xororz.localdream.service.MeshyModelUrls
+import android.util.Log
+import androidx.compose.runtime.Composable
+
+private val openAiClient by lazy {
+    OkHttpClient.Builder().build()
+}
+private val meshyClient by lazy {
+    OkHttpClient.Builder().build()
+}
+
+private suspend fun translateToEnglish(text: String): String = withContext(Dispatchers.IO) {
+
+    val payload = JSONObject().apply {
+        put("model", "gpt-3.5-turbo")
+        put("messages", JSONArray().apply {
+            // 변경된 시스템 메시지
+            put(JSONObject().apply {
+                put("role", "system")
+                put("content",
+                    "You are a translator. " +
+                            "If the user’s text is not in English, translate it to English. " +
+                            "If it is already English, return it unchanged."
+                )
+            })
+            put(JSONObject().apply {
+                put("role", "user")
+                put("content", text)
+            })
+        })
+    }
+    val req = Request.Builder()
+        .url("https://api.openai.com/v1/chat/completions")
+        .addHeader("Authorization", "Bearer ${BuildConfig.OPENAI_API_KEY}")
+        .post(payload.toString().toRequestBody("application/json".toMediaTypeOrNull()))
+        .build()
+
+    openAiClient.newCall(req).execute().use { res ->
+        if (!res.isSuccessful) throw IOException("OpenAI Error: ${res.code}")
+        JSONObject(res.body!!.string())
+            .getJSONArray("choices")
+            .getJSONObject(0)
+            .getJSONObject("message")
+            .getString("content")
+            .trim()
+    }
+}
+
+
 
 private suspend fun reportImage(
     context: Context,
@@ -115,7 +174,10 @@ private suspend fun reportImage(
             val byteArrayOutputStream = ByteArrayOutputStream()
             bitmap.compress(Bitmap.CompressFormat.PNG, 90, byteArrayOutputStream)
             val byteArray = byteArrayOutputStream.toByteArray()
-            val base64Image = Base64.getEncoder().encodeToString(byteArray)
+            val base64Image = AndroidBase64.encodeToString(
+                byteArray,
+                AndroidBase64.NO_WRAP
+            )
 
             val jsonObject = JSONObject().apply {
                 put("model_name", modelName)
@@ -313,6 +375,8 @@ fun ModelRunScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val generationPreferences = remember { GenerationPreferences(context) }
+    var isConverting3D by remember { mutableStateOf(false) }
+    var meshUrls by remember { mutableStateOf<MeshyModelUrls?>(null) }
     val coroutineScope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
     val modelRepository = remember { ModelRepository(context) }
@@ -379,11 +443,62 @@ fun ModelRunScreen(
     var maskBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isInpaintMode by remember { mutableStateOf(false) }
     var savedPathHistory by remember { mutableStateOf<List<PathData>?>(null) }
+    var isNegativeSpeech by remember { mutableStateOf(false) }
+    // RECORD_AUDIO 권한 요청 런처
+    val requestRecordPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(context, "음성 입력 권한이 필요합니다", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result: ActivityResult ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull().orEmpty()
+            if (isNegativeSpeech) {
+                negativePrompt += " $spoken"
+                scope.launch {
+                    generationPreferences.saveNegativePrompt(modelId, negativePrompt)
+                }
+            } else {
+                prompt += " $spoken"
+                scope.launch {
+                    generationPreferences.savePrompt(modelId, prompt)
+                }
+            }
+        }
+    }
+
+    fun startSpeechRecognition() {
+        if (ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.RECORD_AUDIO
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestRecordPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "음성으로 입력하세요")
+            }
+            speechLauncher.launch(intent)
+        }
+    }
 
     fun processSelectedImage(uri: Uri) {
         imageUriForCrop = uri
         showCropScreen = true
     }
+
     fun handleCropComplete(base64String: String, bitmap: Bitmap) {
         showCropScreen = false
         selectedImageUri = imageUriForCrop
@@ -405,7 +520,13 @@ fun ModelRunScreen(
             }
         }
     }
-    fun handleInpaintComplete(maskBase64: String, originalBitmap: Bitmap, maskBmp: Bitmap, pathHistory: List<PathData>) {
+
+    fun handleInpaintComplete(
+        maskBase64: String,
+        originalBitmap: Bitmap,
+        maskBmp: Bitmap,
+        pathHistory: List<PathData>
+    ) {
         showInpaintScreen = false
         isInpaintMode = true
         maskBitmap = maskBmp
@@ -443,6 +564,20 @@ fun ModelRunScreen(
         ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let { processSelectedImage(it) }
+    }
+
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
+
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        if (success) {
+
+            cameraImageUri?.let { processSelectedImage(it) }
+        } else {
+            cameraImageUri = null
+        }
     }
 
     val requestMediaImagePermissionLauncher = rememberLauncherForActivityResult(
@@ -820,7 +955,7 @@ fun ModelRunScreen(
                             )
                         }
                     },
-                    navigationIcon = {
+                    /*navigationIcon = {
                         IconButton(onClick = {
                             if (isRunning) {
                                 showExitDialog = true
@@ -833,7 +968,7 @@ fun ModelRunScreen(
                                 contentDescription = stringResource(R.string.back)
                             )
                         }
-                    },
+                    },*/
                     colors = TopAppBarDefaults.largeTopAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
                         scrolledContainerColor = MaterialTheme.colorScheme.surface
@@ -919,37 +1054,64 @@ fun ModelRunScreen(
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically
                                             ) {
+                                                // 화면 상단의 img2img 버튼 위치에 이 코드를 넣으세요
                                                 if (useImg2img) {
-                                                    TextButton(
-                                                        onClick = {
-                                                            onSelectImageClick()
-                                                        }
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(
+                                                            8.dp
+                                                        )
                                                     ) {
-                                                        Text(
-                                                            "img2img",
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            modifier = Modifier.padding(end = 4.dp)
-                                                        )
-                                                        Icon(
-                                                            Icons.Default.Image,
-                                                            contentDescription = "select image",
-                                                            modifier = Modifier.size(20.dp)
-                                                        )
+                                                        // 앨범
+                                                        TextButton(onClick = { onSelectImageClick() }) {
+                                                            Icon(
+                                                                Icons.Default.Image,
+                                                                contentDescription = "앨범에서 선택",
+                                                                modifier = Modifier.size(20.dp)
+                                                            )
+                                                            Spacer(Modifier.width(4.dp))
+                                                            Text("앨범")
+                                                        }
+                                                        // 카메라
+                                                        TextButton(onClick = {
+                                                            // cache 에 임시 파일 만들고 URI 얻기
+                                                            val photoFile = File(
+                                                                context.cacheDir,
+                                                                "camera_${System.currentTimeMillis()}.jpg"
+                                                            )
+                                                            cameraImageUri =
+                                                                FileProvider.getUriForFile(
+                                                                    context,
+                                                                    "${context.packageName}.fileprovider",
+                                                                    photoFile
+                                                                )
+                                                            // launcher 실행 (URI 는 절대 null 이 아니어야 합니다)
+                                                            cameraLauncher.launch(cameraImageUri!!)
+                                                        }) {
+                                                            Icon(
+                                                                Icons.Default.CameraAlt,
+                                                                contentDescription = "카메라로 촬영",
+                                                                modifier = Modifier.size(20.dp)
+                                                            )
+                                                            Spacer(Modifier.width(4.dp))
+                                                            Text("카메라")
+                                                        }
                                                     }
                                                 }
+
                                                 TextButton(
                                                     onClick = { showAdvancedSettings = true }
                                                 ) {
-                                                    Text(
-                                                        stringResource(R.string.advanced_settings),
-                                                        style = MaterialTheme.typography.bodyMedium,
-                                                        modifier = Modifier.padding(end = 4.dp)
-                                                    )
                                                     Icon(
                                                         Icons.Default.Settings,
                                                         contentDescription = stringResource(R.string.settings),
                                                         modifier = Modifier.size(20.dp)
                                                     )
+                                                    Text(
+                                                        stringResource(R.string.advanced_settings),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        modifier = Modifier.padding(end = 4.dp)
+                                                    )
+
                                                 }
                                             }
                                             if (showAdvancedSettings) {
@@ -1265,14 +1427,27 @@ fun ModelRunScreen(
                                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline
                                             ),
                                             trailingIcon = {
-                                                IconButton(onClick = {
-                                                    expandedPrompt = !expandedPrompt
-                                                }) {
-                                                    Icon(
-                                                        if (expandedPrompt) Icons.Default.KeyboardArrowUp
-                                                        else Icons.Default.KeyboardArrowDown,
-                                                        contentDescription = if (expandedPrompt) "collapse" else "expand"
-                                                    )
+                                                Row {
+                                                    // 음성 버튼
+                                                    IconButton(onClick = {
+                                                        isNegativeSpeech = false
+                                                        startSpeechRecognition()
+                                                    }) {
+                                                        Icon(
+                                                            Icons.Default.Mic,
+                                                            contentDescription = "음성 입력"
+                                                        )
+                                                    }
+                                                    // 원래 있던 펼침/접기 버튼
+                                                    IconButton(onClick = {
+                                                        expandedPrompt = !expandedPrompt
+                                                    }) {
+                                                        Icon(
+                                                            if (expandedPrompt) Icons.Default.KeyboardArrowUp
+                                                            else Icons.Default.KeyboardArrowDown,
+                                                            contentDescription = if (expandedPrompt) "접기" else "펼치기"
+                                                        )
+                                                    }
                                                 }
                                             }
                                         )
@@ -1303,14 +1478,26 @@ fun ModelRunScreen(
                                                 unfocusedBorderColor = MaterialTheme.colorScheme.outline
                                             ),
                                             trailingIcon = {
-                                                IconButton(onClick = {
-                                                    expandedNegativePrompt = !expandedNegativePrompt
-                                                }) {
-                                                    Icon(
-                                                        if (expandedNegativePrompt) Icons.Default.KeyboardArrowUp
-                                                        else Icons.Default.KeyboardArrowDown,
-                                                        contentDescription = if (expandedNegativePrompt) "collapse" else "expand"
-                                                    )
+                                                Row {
+                                                    IconButton(onClick = {
+                                                        isNegativeSpeech = true
+                                                        startSpeechRecognition()
+                                                    }) {
+                                                        Icon(
+                                                            Icons.Default.Mic,
+                                                            contentDescription = "음성 입력"
+                                                        )
+                                                    }
+                                                    IconButton(onClick = {
+                                                        expandedNegativePrompt =
+                                                            !expandedNegativePrompt
+                                                    }) {
+                                                        Icon(
+                                                            if (expandedNegativePrompt) Icons.Default.KeyboardArrowUp
+                                                            else Icons.Default.KeyboardArrowDown,
+                                                            contentDescription = if (expandedNegativePrompt) "접기" else "펼치기"
+                                                        )
+                                                    }
                                                 }
                                             }
                                         )
@@ -1318,52 +1505,61 @@ fun ModelRunScreen(
                                         Button(
                                             onClick = {
                                                 focusManager.clearFocus()
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start generation"
-                                                )
-                                                generationParamsTmp = GenerationParameters(
-                                                    steps = steps.roundToInt(),
-                                                    cfg = cfg,
-                                                    seed = 0,
-                                                    prompt = prompt,
-                                                    negativePrompt = negativePrompt,
-                                                    generationTime = "",
-                                                    size = size,
-                                                    runOnCpu = model.runOnCpu,
-                                                    denoiseStrength = denoiseStrength,
-                                                    inputImage = null
-                                                )
+                                                coroutineScope.launch {
+                                                    // 한글 → 영어 번역 (빈 값은 번역 호출 안 함)
+                                                    val enPrompt = if (prompt.isBlank()) {
+                                                        ""
+                                                    } else {
+                                                        translateToEnglish(prompt)
+                                                    }
 
-                                                val intent = Intent(
-                                                    context,
-                                                    BackgroundGenerationService::class.java
-                                                ).apply {
-                                                    putExtra("prompt", prompt)
-                                                    putExtra("negative_prompt", negativePrompt)
-                                                    putExtra("steps", steps.roundToInt())
-                                                    putExtra("cfg", cfg)
-                                                    seed.toLongOrNull()
-                                                        ?.let { putExtra("seed", it) }
-                                                    putExtra("size", size)
-                                                    putExtra("denoise_strength", denoiseStrength)
+                                                    val enNegPrompt =
+                                                        if (negativePrompt.isBlank()) {
+                                                            ""
+                                                        } else {
+                                                            translateToEnglish(negativePrompt)
+                                                        }
 
-                                                    if (selectedImageUri != null && base64EncodeDone) {
-                                                        putExtra("has_image", true)
-                                                        if (isInpaintMode && maskBitmap != null) {
-                                                            putExtra("has_mask", true)
+                                                    // generationParamsTmp 설정
+                                                    generationParamsTmp = GenerationParameters(
+                                                        steps = steps.roundToInt(),
+                                                        cfg = cfg,
+                                                        seed = 0,
+                                                        prompt = enPrompt,
+                                                        negativePrompt = enNegPrompt,
+                                                        generationTime = "",
+                                                        size = size,
+                                                        runOnCpu = model.runOnCpu,
+                                                        denoiseStrength = denoiseStrength,
+                                                        inputImage = null
+                                                    )
+
+                                                    // 서비스 호출 Intent 구성
+                                                    val intent = Intent(
+                                                        context,
+                                                        BackgroundGenerationService::class.java
+                                                    ).apply {
+                                                        putExtra("prompt", enPrompt)
+                                                        putExtra("negative_prompt", enNegPrompt)
+                                                        putExtra("steps", steps.roundToInt())
+                                                        putExtra("cfg", cfg)
+                                                        seed.toLongOrNull()
+                                                            ?.let { putExtra("seed", it) }
+                                                        putExtra("size", size)
+                                                        putExtra(
+                                                            "denoise_strength",
+                                                            denoiseStrength
+                                                        )
+                                                        if (selectedImageUri != null && base64EncodeDone) {
+                                                            putExtra("has_image", true)
+                                                            if (isInpaintMode && maskBitmap != null) {
+                                                                putExtra("has_mask", true)
+                                                            }
                                                         }
                                                     }
+
+                                                    context.startForegroundService(intent)
                                                 }
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start service"
-                                                )
-                                                context.startForegroundService(intent)
-                                                android.util.Log.d(
-                                                    "ModelRunScreen",
-                                                    "start service sent"
-                                                )
                                             },
                                             enabled = serviceState !is GenerationState.Progress,
                                             modifier = Modifier.fillMaxWidth(),
@@ -1371,8 +1567,9 @@ fun ModelRunScreen(
                                         ) {
                                             if (serviceState is GenerationState.Progress) {
                                                 CircularProgressIndicator(
-                                                    modifier = Modifier.size(24.dp),
-                                                    color = MaterialTheme.colorScheme.onPrimary
+                                                    modifier = Modifier.size(
+                                                        24.dp
+                                                    )
                                                 )
                                             } else {
                                                 Text(stringResource(R.string.generate_image))
@@ -1475,7 +1672,9 @@ fun ModelRunScreen(
                                                     } else {
                                                         selectedImageUri?.let { uri ->
                                                             AsyncImage(
-                                                                model = ImageRequest.Builder(LocalContext.current)
+                                                                model = ImageRequest.Builder(
+                                                                    LocalContext.current
+                                                                )
                                                                     .data(uri)
                                                                     .crossfade(true)
                                                                     .build(),
@@ -1522,7 +1721,11 @@ fun ModelRunScreen(
                                                             if (croppedBitmap != null) {
                                                                 showInpaintScreen = true
                                                             } else {
-                                                                Toast.makeText(context, "Please Crop First", Toast.LENGTH_SHORT).show()
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    "Please Crop First",
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
                                                             }
                                                         },
                                                         shape = CircleShape,
@@ -1714,6 +1917,41 @@ fun ModelRunScreen(
                                                                 contentDescription = "save image"
                                                             )
                                                         }
+                                                        FilledTonalIconButton(
+                                                            onClick = {
+                                                                // 1) 변환 중이거나 이미지가 없으면 무시
+                                                                if (isConverting3D || currentBitmap == null) return@FilledTonalIconButton
+
+                                                                // 2) 3D 변환 시작
+                                                                isConverting3D = true
+                                                                coroutineScope.launch {
+                                                                    try {
+                                                                        // IO 스레드에서 작업 실행
+                                                                        val taskId = withContext(Dispatchers.IO) {
+                                                                            MeshyService.createTask(currentBitmap!!)
+                                                                        }
+                                                                        val urls = withContext(Dispatchers.IO) {
+                                                                            MeshyService.pollTask(taskId)
+                                                                        }
+                                                                        // 성공적으로 URL을 받으면 AR 화면으로 넘길 준비
+                                                                        meshUrls = urls
+                                                                    } catch (e: Exception) {
+                                                                        Log.e("ModelRunScreen", "Meshy 3D 변환 에러", e)
+                                                                        Toast.makeText(context, "3D 변환 실패: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                                    } finally {
+                                                                        // 작업 완료 플래그 해제
+                                                                        isConverting3D = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ) {
+                                                            if (isConverting3D) {
+                                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                                            } else {
+                                                                Icon(imageVector = Icons.Default.Add, contentDescription = "view in AR")
+                                                            }
+                                                        }
+
                                                     }
                                                 }
                                             }
@@ -1960,6 +2198,28 @@ fun ModelRunScreen(
                         }
                     }
                 }
+            }
+        }
+        LaunchedEffect(meshUrls) {
+            meshUrls?.let { urls ->
+                Intent(context, ArViewActivity::class.java)
+                    .apply { putExtra("model_url", urls.glb) }
+                    .also(context::startActivity)
+                meshUrls = null // 재진입 방지
+                isConverting3D = false
+            }
+        }
+
+        // ② (선택) 3D 변환 중 오버레이 로딩 화면
+        if (isConverting3D) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+                Text(stringResource(R.string.loading_model))
             }
         }
         if (showCropScreen && imageUriForCrop != null) {
