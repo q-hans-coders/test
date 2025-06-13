@@ -2,8 +2,6 @@
 
 ## “local-dream” by xororz, [GitHub](https://github.com/xororz/local-dream), Licensed under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/deed.ko)
 <br/>
-<br/>
-
 # 2025-1 한성대학교 퀄컴 기업 연계 캡스톤 디자인 결과물
 
 # 1. 프로젝트 개요
